@@ -1,0 +1,84 @@
+@inject AlarmApiClient Api
+@inject ISnackbar Snackbar
+
+<MudCard Elevation="6" Class="pa-2">
+    <MudCardHeader>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h5">Wecker @Alarm.Id</MudText>
+        </CardHeaderContent>
+        <CardHeaderActions>
+            <MudSwitch T="bool" Value="Alarm.Enabled" ValueChanged="EnabledChanged"
+                       Color="Color.Success" Size="Size.Large" />
+        </CardHeaderActions>
+    </MudCardHeader>
+
+    <MudCardContent>
+        <MudStack Spacing="4">
+
+            <MudTimePicker Label="Uhrzeit" Variant="Variant.Outlined" PickerVariant="PickerVariant.Dialog"
+                           AmPm="false" Editable="false" Time="Alarm.Time" TimeChanged="TimeChanged" />
+
+            <MudRadioGroup T="AlarmMode" Value="Alarm.Mode" ValueChanged="ModeChanged">
+                <MudRadio Value="AlarmMode.Once" Size="Size.Large">Einmalig</MudRadio>
+                <MudRadio Value="AlarmMode.Daily" Size="Size.Large">Täglich</MudRadio>
+                <MudRadio Value="AlarmMode.Weekdays" Size="Size.Large">Werktags (Mo–Fr)</MudRadio>
+            </MudRadioGroup>
+
+            @if (Alarm.Mode == AlarmMode.Once)
+            {
+                <MudDatePicker Label="Datum" Variant="Variant.Outlined" PickerVariant="PickerVariant.Dialog"
+                               Editable="false" MinDate="DateTime.Today" Date="Alarm.Date" DateChanged="DateChanged" />
+            }
+
+            <MudSelect T="string" Label="Musik" Variant="Variant.Outlined"
+                       Value="Alarm.File" ValueChanged="FileChanged">
+                @foreach (var f in Files)
+                {
+                    <MudSelectItem T="string" Value="@f">@f</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.PlayArrow"
+                       Disabled="string.IsNullOrEmpty(Alarm.File)" OnClick="TestAsync">Probehören</MudButton>
+
+        </MudStack>
+    </MudCardContent>
+</MudCard>
+
+@code {
+    [Parameter, EditorRequired] public AlarmDto Alarm { get; set; } = default!;
+    [Parameter] public IReadOnlyList<string> Files { get; set; } = [];
+
+    private async Task Persist()
+    {
+        try
+        {
+            var result = await Api.SaveAsync(Alarm);
+            Alarm.Enabled = result.Alarm.Enabled; // Service kann den Wecker bei Fehlern deaktivieren
+            if (result.Error is not null) Snackbar.Add(result.Error, Severity.Warning);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Snackbar.Add("Service nicht erreichbar – nicht gespeichert.", Severity.Error);
+        }
+    }
+
+    private async Task TestAsync()
+    {
+        try
+        {
+            var error = await Api.TestAsync(Alarm.Id);
+            if (error is not null) Snackbar.Add(error, Severity.Warning);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Snackbar.Add("Service nicht erreichbar.", Severity.Error);
+        }
+    }
+
+    private async Task EnabledChanged(bool v) { Alarm.Enabled = v; await Persist(); }
+    private async Task TimeChanged(TimeSpan? v) { Alarm.Time = v; await Persist(); }
+    private async Task ModeChanged(AlarmMode v) { Alarm.Mode = v; await Persist(); }
+    private async Task DateChanged(DateTime? v) { Alarm.Date = v; await Persist(); }
+    private async Task FileChanged(string v) { Alarm.File = v; await Persist(); }
+}

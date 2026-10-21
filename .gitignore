@@ -1,0 +1,23 @@
+# .NET build output
+**/bin/
+**/obj/
+**/publish/
+/publish/
+
+# IDE and editor files
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local runtime data
+/src/Wecker.Service/data/alarms.json
+/src/Wecker.Service/data/music/
+
+# Local backups and logs
+*.bak
+*.log
+
+# OS-generated files
+.DS_Store
+Thumbs.db

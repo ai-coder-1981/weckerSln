@@ -1,0 +1,28 @@
+@inherits LayoutComponentBase
+@inject IDialogService Dialogs
+
+<MudThemeProvider IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1">
+        <MudIcon Icon="@Icons.Material.Filled.Alarm" Class="mr-3" />
+        <MudText Typo="Typo.h5">Wecker</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.PowerSettingsNew" OnClick="OpenShutdownAsync">Aus</MudButton>
+    </MudAppBar>
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="my-4">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private Task OpenShutdownAsync() =>
+        Dialogs.ShowAsync<ShutdownDialog>("Herunterfahren",
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+}

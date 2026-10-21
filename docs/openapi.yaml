@@ -1,0 +1,300 @@
+openapi: 3.0.3
+info:
+  title: Wecker.Service API
+  version: "1.0"
+  description: |
+    REST-Schnittstelle des Wecker-Dienstes (läuft auf dem Raspberry).
+    Die Web-UI (Wecker.Web) ist der einzige vorgesehene Client.
+
+    Konventionen:
+    - JSON, Eigenschaftsnamen in camelCase.
+    - Enums werden als Zahl übertragen (AlarmMode: 0 = Einmalig, 1 = Täglich, 2 = Werktags).
+    - Uhrzeiten als "hh:mm:ss" (TimeSpan), Datum als ISO-8601 (nur der Datumsteil zählt).
+    - Fehlermeldungen sind ein JSON-String, z. B. "Bitte zuerst eine Musikdatei wählen.".
+    - Keine Authentifizierung. Der Dienst hört standardmäßig nur auf 127.0.0.1.
+
+    Zusätzlich gibt es einen SignalR-Hub unter /hub/status (siehe docs/API.md, nicht Teil von OpenAPI):
+    Events "StatusChanged" (StatusDto) und "MusicChanged" (ohne Argumente).
+servers:
+  - url: http://127.0.0.1:5001
+    description: Standard (lokal auf dem Raspberry)
+
+tags:
+  - name: Alarms
+    description: Die drei Wecker
+  - name: Music
+    description: MP3-Dateien
+  - name: Status
+    description: Klingelstatus und nächste Zeiten
+  - name: Shutdown
+    description: Herunterfahren
+
+paths:
+  /api/alarms:
+    get:
+      tags: [Alarms]
+      summary: Alle Wecker lesen
+      responses:
+        "200":
+          description: Immer genau drei Wecker (Id 1 bis 3)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AlarmDto" }
+              example:
+                - { id: 1, enabled: true,  time: "07:00:00", mode: 2, date: null, file: "morgen.mp3" }
+                - { id: 2, enabled: false, time: "07:00:00", mode: 1, date: null, file: null }
+                - { id: 3, enabled: true,  time: "09:30:00", mode: 0, date: "2026-10-25T00:00:00", file: "sonntag.mp3" }
+
+  /api/alarms/{id}:
+    put:
+      tags: [Alarms]
+      summary: Wecker speichern und neu einplanen
+      description: |
+        Ersetzt die Einstellungen des Weckers. Die Id im Body wird ignoriert, es gilt die Id aus der URL.
+        Ist die Eingabe unvollständig oder ungültig (z. B. keine Datei, Zeitpunkt in der Vergangenheit),
+        werden die Werte trotzdem gespeichert, der Wecker wird aber deaktiviert und `error` enthält den Grund.
+      parameters:
+        - $ref: "#/components/parameters/AlarmId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlarmDto" }
+            example: { id: 1, enabled: true, time: "06:45:00", mode: 2, date: null, file: "morgen.mp3" }
+      responses:
+        "200":
+          description: Gespeichert (ggf. mit Fehlerhinweis)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveResultDto" }
+              examples:
+                ok:
+                  summary: Erfolgreich
+                  value:
+                    alarm: { id: 1, enabled: true, time: "06:45:00", mode: 2, date: null, file: "morgen.mp3" }
+                    error: null
+                fehler:
+                  summary: Gespeichert, aber deaktiviert
+                  value:
+                    alarm: { id: 1, enabled: false, time: "06:45:00", mode: 2, date: null, file: null }
+                    error: "Bitte eine vorhandene Musikdatei wählen."
+        "404":
+          description: Unbekannte Wecker-Id (nur 1 bis 3 gültig)
+
+  /api/alarms/{id}/test:
+    post:
+      tags: [Alarms]
+      summary: Musikdatei des Weckers probehören
+      description: Spielt die Datei des Weckers ab, unabhängig davon, ob der Wecker aktiv ist. Beenden mit POST /api/stop.
+      parameters:
+        - $ref: "#/components/parameters/AlarmId"
+      responses:
+        "204": { description: Wiedergabe gestartet }
+        "400":
+          description: Wecker nicht gefunden, keine Datei gewählt oder Player nicht startbar
+          content:
+            application/json:
+              schema: { type: string }
+              example: "Bitte zuerst eine Musikdatei wählen."
+
+  /api/music:
+    get:
+      tags: [Music]
+      summary: MP3-Dateien auflisten
+      responses:
+        "200":
+          description: Dateinamen, alphabetisch sortiert
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+              example: ["morgen.mp3", "sonntag.mp3"]
+    post:
+      tags: [Music]
+      summary: MP3-Datei hochladen
+      description: |
+        Multipart-Formular mit dem Feld `file`. Erlaubt sind nur .mp3 (Dateikopf wird geprüft), maximal 100 MB.
+        Vorhandene Dateien werden nicht überschrieben. Löst das Hub-Event "MusicChanged" aus.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Gespeichert, Antwort ist der (bereinigte) Dateiname
+          content:
+            application/json:
+              schema: { type: string }
+              example: "morgen.mp3"
+        "400":
+          description: Ungültige Datei oder Name bereits vorhanden
+          content:
+            application/json:
+              schema: { type: string }
+              examples:
+                vorhanden: { value: "'morgen.mp3' existiert bereits." }
+                keinMp3:   { value: "Die Datei ist keine gültige MP3." }
+                endung:    { value: "Nur MP3-Dateien sind erlaubt." }
+
+  /api/music/{file}:
+    delete:
+      tags: [Music]
+      summary: MP3-Datei löschen
+      description: Verweigert, wenn ein Wecker die Datei verwendet. Löst das Hub-Event "MusicChanged" aus.
+      parameters:
+        - name: file
+          in: path
+          required: true
+          description: Dateiname (URL-kodiert)
+          schema: { type: string }
+          example: "morgen.mp3"
+      responses:
+        "204": { description: Gelöscht }
+        "409":
+          description: Datei nicht gefunden oder in Benutzung
+          content:
+            application/json:
+              schema: { type: string }
+              example: "Die Datei wird von Wecker 1 verwendet. Erst dort eine andere Datei wählen."
+
+  /api/status:
+    get:
+      tags: [Status]
+      summary: Aktueller Status
+      responses:
+        "200":
+          description: Klingelt gerade ein Wecker, wann kommt der nächste, wann das nächste Herunterfahren
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusDto" }
+              examples:
+                ruhig:
+                  value:
+                    ringingAlarmId: null
+                    ringingFile: null
+                    nextAlarmId: 1
+                    nextFireTime: "2026-10-22T06:45:00+02:00"
+                    nextShutdownTime: "2026-10-21T22:00:00+02:00"
+                klingelt:
+                  value:
+                    ringingAlarmId: 1
+                    ringingFile: "morgen.mp3"
+                    nextAlarmId: 3
+                    nextFireTime: "2026-10-25T09:30:00+01:00"
+                    nextShutdownTime: null
+
+  /api/stop:
+    post:
+      tags: [Status]
+      summary: Klingeln beenden
+      description: Beendet die Wiedergabe. Auch wenn nichts spielt, ist die Antwort 204.
+      responses:
+        "204": { description: Gestoppt }
+
+  /api/shutdown:
+    get:
+      tags: [Shutdown]
+      summary: Zeitplan für das Herunterfahren lesen
+      responses:
+        "200":
+          description: Aktueller Zeitplan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShutdownDto" }
+              example: { enabled: true, time: "22:00:00", mode: 1, date: null }
+    put:
+      tags: [Shutdown]
+      summary: Zeitplan speichern und neu einplanen
+      description: Gleiche Regeln wie bei den Weckern. Bei ungültigen Werten wird der Zeitplan deaktiviert und `error` gesetzt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShutdownDto" }
+            example: { enabled: true, time: "23:15:00", mode: 2, date: null }
+      responses:
+        "200":
+          description: Gespeichert
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SaveShutdownResultDto" }
+              example:
+                shutdown: { enabled: true, time: "23:15:00", mode: 2, date: null }
+                error: null
+
+  /api/shutdown/now:
+    post:
+      tags: [Shutdown]
+      summary: Raspberry jetzt herunterfahren
+      description: |
+        Antwortet sofort mit 204 und fährt nach ca. 1,5 Sekunden herunter (Wiedergabe wird vorher gestoppt).
+        Der Raspberry schaltet sich nicht von selbst wieder ein.
+        Auf Windows/macOS wird das Herunterfahren nur geloggt.
+      responses:
+        "204": { description: Herunterfahren angestoßen }
+
+components:
+  parameters:
+    AlarmId:
+      name: id
+      in: path
+      required: true
+      description: Wecker-Nummer
+      schema: { type: integer, minimum: 1, maximum: 3 }
+      example: 1
+
+  schemas:
+    AlarmMode:
+      type: integer
+      enum: [0, 1, 2]
+      description: "0 = Einmalig (Datum nötig), 1 = Täglich, 2 = Werktags (Mo–Fr)"
+      example: 2
+
+    AlarmDto:
+      type: object
+      required: [id, enabled, mode]
+      properties:
+        id:      { type: integer, minimum: 1, maximum: 3 }
+        enabled: { type: boolean, description: "Ist der Wecker scharf?" }
+        time:    { type: string, nullable: true, pattern: '^\d{2}:\d{2}:\d{2}$', example: "07:00:00" }
+        mode:    { $ref: "#/components/schemas/AlarmMode" }
+        date:    { type: string, format: date-time, nullable: true, description: "Nur bei mode = 0 relevant" }
+        file:    { type: string, nullable: true, description: "Dateiname aus /api/music" }
+
+    SaveResultDto:
+      type: object
+      properties:
+        alarm: { $ref: "#/components/schemas/AlarmDto" }
+        error: { type: string, nullable: true, description: "Wenn gesetzt: gespeichert, aber deaktiviert" }
+
+    StatusDto:
+      type: object
+      properties:
+        ringingAlarmId:   { type: integer, nullable: true }
+        ringingFile:      { type: string, nullable: true }
+        nextAlarmId:      { type: integer, nullable: true }
+        nextFireTime:     { type: string, format: date-time, nullable: true }
+        nextShutdownTime: { type: string, format: date-time, nullable: true }
+
+    ShutdownDto:
+      type: object
+      required: [enabled, mode]
+      properties:
+        enabled: { type: boolean }
+        time:    { type: string, nullable: true, pattern: '^\d{2}:\d{2}:\d{2}$', example: "22:00:00" }
+        mode:    { $ref: "#/components/schemas/AlarmMode" }
+        date:    { type: string, format: date-time, nullable: true }
+
+    SaveShutdownResultDto:
+      type: object
+      properties:
+        shutdown: { $ref: "#/components/schemas/ShutdownDto" }
+        error:    { type: string, nullable: true }

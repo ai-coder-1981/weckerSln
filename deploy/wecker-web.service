@@ -1,0 +1,16 @@
+[Unit]
+Description=Wecker Web-UI (Blazor)
+After=network.target wecker-service.service
+Requires=wecker-service.service
+
+[Service]
+Type=simple
+User=wecker
+Group=wecker
+WorkingDirectory=/opt/wecker/web
+ExecStart=/usr/bin/dotnet /opt/wecker/web/Wecker.Web.dll
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

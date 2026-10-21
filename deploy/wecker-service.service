@@ -1,0 +1,20 @@
+[Unit]
+Description=Wecker Service (Quartz + Audio)
+After=network.target sound.target
+
+[Service]
+Type=notify
+User=wecker
+Group=wecker
+SupplementaryGroups=audio
+WorkingDirectory=/opt/wecker/service
+ExecStart=/usr/bin/dotnet /opt/wecker/service/Wecker.Service.dll
+StateDirectory=wecker
+Restart=always
+RestartSec=5
+# Audio-Gerät per 'sudo systemctl edit wecker-service' setzen, z. B.:
+# [Service]
+# Environment=Player__Device=plughw:0,0
+
+[Install]
+WantedBy=multi-user.target

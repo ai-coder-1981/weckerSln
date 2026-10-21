@@ -1,0 +1,97 @@
+@inject AlarmApiClient Api
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="4">
+
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large" FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.PowerSettingsNew" Style="height:72px;font-size:1.25rem"
+                       OnClick="ShutdownNowAsync">Jetzt herunterfahren</MudButton>
+
+            <MudDivider />
+
+            <MudText Typo="Typo.subtitle1">Zeitgesteuert herunterfahren</MudText>
+
+            @if (_offline)
+            {
+                <MudAlert Severity="Severity.Error">Service nicht erreichbar.</MudAlert>
+            }
+            else if (_cfg is not null)
+            {
+                <MudSwitch T="bool" @bind-Value="_cfg.Enabled" Color="Color.Error" Size="Size.Large"
+                           Label="@(_cfg.Enabled ? "Aktiv" : "Aus")" />
+
+                <MudTimePicker Label="Uhrzeit" Variant="Variant.Outlined" PickerVariant="PickerVariant.Dialog"
+                               AmPm="false" Editable="false" @bind-Time="_cfg.Time" />
+
+                <MudRadioGroup T="AlarmMode" @bind-Value="_cfg.Mode">
+                    <MudRadio Value="AlarmMode.Once" Size="Size.Large">Einmalig</MudRadio>
+                    <MudRadio Value="AlarmMode.Daily" Size="Size.Large">Täglich</MudRadio>
+                    <MudRadio Value="AlarmMode.Weekdays" Size="Size.Large">Werktags (Mo–Fr)</MudRadio>
+                </MudRadioGroup>
+
+                @if (_cfg.Mode == AlarmMode.Once)
+                {
+                    <MudDatePicker Label="Datum" Variant="Variant.Outlined" PickerVariant="PickerVariant.Dialog"
+                                   Editable="false" MinDate="DateTime.Today" @bind-Date="_cfg.Date" />
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Zeitplan speichern</MudButton>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Schließen</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = default!;
+
+    private ShutdownDto? _cfg;
+    private bool _offline;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _cfg = await Api.GetShutdownAsync(); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { _offline = true; }
+    }
+
+    private void Close() => MudDialog.Close();
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            var result = await Api.SaveShutdownAsync(_cfg!);
+            _cfg = result.Shutdown;
+            if (result.Error is not null) Snackbar.Add(result.Error, Severity.Warning);
+            else Snackbar.Add(_cfg.Enabled ? "Zeitplan gespeichert." : "Zeitplan ausgeschaltet.", Severity.Success);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Snackbar.Add("Service nicht erreichbar – nicht gespeichert.", Severity.Error);
+        }
+    }
+
+    private async Task ShutdownNowAsync()
+    {
+        var confirm = await Dialogs.ShowMessageBox("Herunterfahren",
+            "Der Raspberry wird jetzt heruntergefahren. Die Weboberfläche ist danach nicht mehr erreichbar, und es klingelt kein Wecker mehr.",
+            yesText: "Herunterfahren", cancelText: "Abbrechen");
+        if (confirm != true) return;
+
+        try
+        {
+            await Api.ShutdownNowAsync();
+            Snackbar.Add("Fährt herunter …", Severity.Info);
+            MudDialog.Close();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Snackbar.Add("Service nicht erreichbar.", Severity.Error);
+        }
+    }
+}

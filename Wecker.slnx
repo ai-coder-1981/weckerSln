@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Wecker.Contracts/Wecker.Contracts.csproj" />
+    <Project Path="src/Wecker.Service/Wecker.Service.csproj" />
+    <Project Path="src/Wecker.Web/Wecker.Web.csproj" />
+  </Folder>
+</Solution>

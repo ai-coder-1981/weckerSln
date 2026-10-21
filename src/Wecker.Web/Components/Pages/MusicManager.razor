@@ -1,0 +1,117 @@
+@inject AlarmApiClient Api
+@inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+
+<MudCard Elevation="4" Class="pa-2">
+    <MudCardHeader>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h6">Musik-Dateien</MudText>
+        </CardHeaderContent>
+        <CardHeaderActions>
+            <MudFileUpload T="IReadOnlyList<IBrowserFile>" FilesChanged="UploadAsync" Accept=".mp3" MaximumFileCount="20">
+                <ActivatorContent>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                               StartIcon="@Icons.Material.Filled.CloudUpload" Disabled="_busy">MP3 hochladen</MudButton>
+                </ActivatorContent>
+            </MudFileUpload>
+        </CardHeaderActions>
+    </MudCardHeader>
+
+    <MudCardContent>
+        <MudStack Spacing="2">
+            @if (_busy)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2">Lade hoch: @_current</MudText>
+            }
+
+            @if (Files.Count == 0)
+            {
+                <MudText Typo="Typo.body2">Noch keine Dateien vorhanden.</MudText>
+            }
+
+            @foreach (var f in Files)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.MusicNote" />
+                        <MudText>@f</MudText>
+                    </MudStack>
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                   Disabled="_busy" OnClick="() => DeleteAsync(f)" />
+                </MudStack>
+                <MudDivider />
+            }
+        </MudStack>
+    </MudCardContent>
+</MudCard>
+
+@code {
+    private const long MaxSize = 100L * 1024 * 1024;
+
+    [Parameter] public IReadOnlyList<string> Files { get; set; } = [];
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private bool _busy;
+    private string? _current;
+
+    private async Task UploadAsync(IReadOnlyList<IBrowserFile> files)
+    {
+        _busy = true;
+        var ok = 0;
+        try
+        {
+            foreach (var f in files)
+            {
+                _current = f.Name;
+                StateHasChanged();
+
+                if (f.Size > MaxSize)
+                {
+                    Snackbar.Add($"{f.Name}: größer als 100 MB.", Severity.Warning);
+                    continue;
+                }
+                try
+                {
+                    await using var stream = f.OpenReadStream(MaxSize);
+                    var error = await Api.UploadAsync(f.Name, stream);
+                    if (error is null) ok++;
+                    else Snackbar.Add($"{f.Name}: {error}", Severity.Warning);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+                {
+                    Snackbar.Add($"{f.Name}: Upload fehlgeschlagen.", Severity.Error);
+                }
+            }
+        }
+        finally
+        {
+            _busy = false;
+            _current = null;
+        }
+
+        if (ok > 0)
+        {
+            Snackbar.Add($"{ok} Datei(en) hochgeladen.", Severity.Success);
+            await OnChanged.InvokeAsync();
+        }
+    }
+
+    private async Task DeleteAsync(string file)
+    {
+        var confirm = await Dialogs.ShowMessageBox("Datei löschen", $"'{file}' wirklich löschen?",
+            yesText: "Löschen", cancelText: "Abbrechen");
+        if (confirm != true) return;
+
+        try
+        {
+            var error = await Api.DeleteMusicAsync(file);
+            if (error is not null) Snackbar.Add(error, Severity.Warning);
+            else await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Snackbar.Add("Service nicht erreichbar.", Severity.Error);
+        }
+    }
+}

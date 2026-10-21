@@ -1,0 +1,157 @@
+@page "/"
+@implements IAsyncDisposable
+@inject AlarmApiClient Api
+@inject IConfiguration Config
+
+<MudStack Spacing="4">
+
+    @if (_offline)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="pa-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText>Wecker-Service nicht erreichbar. Neuer Versuch läuft automatisch.</MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="ReloadAsync">Jetzt versuchen</MudButton>
+            </MudStack>
+        </MudAlert>
+    }
+    else
+    {
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            @if (_status?.NextFireTime is { } next)
+            {
+                <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.Schedule">
+                    Nächster: Wecker @_status.NextAlarmId – @next.ToString("ddd dd.MM. HH:mm")
+                </MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Icon="@Icons.Material.Filled.AlarmOff">Kein Wecker aktiv</MudChip>
+            }
+            @if (_status?.NextShutdownTime is { } sd)
+            {
+                <MudChip T="string" Color="Color.Error" Icon="@Icons.Material.Filled.PowerSettingsNew">
+                    Herunterfahren: @sd.ToString("ddd dd.MM. HH:mm")
+                </MudChip>
+            }
+            <MudText Typo="Typo.body2">@_files.Count MP3-Datei(en)</MudText>
+        </MudStack>
+    }
+
+    <MudGrid Spacing="3">
+        @foreach (var alarm in _alarms)
+        {
+            <MudItem xs="12" md="4">
+                <AlarmCard Alarm="alarm" Files="_files" />
+            </MudItem>
+        }
+    </MudGrid>
+
+    <MusicManager Files="_files" OnChanged="LoadFilesAsync" />
+</MudStack>
+
+<MudOverlay Visible="_status?.RingingAlarmId is not null" DarkBackground="true" ZIndex="2000">
+    <MudPaper Class="pa-8 text-center" Elevation="8">
+        <MudIcon Icon="@Icons.Material.Filled.AlarmOn" Color="Color.Warning" Style="font-size:6rem" />
+        <MudText Typo="Typo.h3" Class="my-4">Wecker @_status?.RingingAlarmId</MudText>
+        <MudText Typo="Typo.h5" Class="mb-6">@_status?.RingingFile</MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.Stop" Style="height:80px;min-width:240px;font-size:1.5rem"
+                   OnClick="StopAsync">Stopp</MudButton>
+    </MudPaper>
+</MudOverlay>
+
+@code {
+    private List<AlarmDto> _alarms = [];
+    private List<string> _files = [];
+    private StatusDto? _status;
+    private bool _offline;
+
+    private HubConnection? _hub;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        var baseUrl = Config["ServiceUrl"] ?? "http://127.0.0.1:5001";
+        _hub = new HubConnectionBuilder()
+            .WithUrl(new Uri(new Uri(baseUrl), ApiRoutes.StatusHub))
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On<StatusDto>(ApiRoutes.StatusChanged, status => InvokeAsync(async () =>
+        {
+            var ringingChanged = _status?.RingingAlarmId != status.RingingAlarmId;
+            _status = status;
+            _offline = false;
+            // Nach dem Klingeln kann ein einmaliger Wecker deaktiviert worden sein
+            if (ringingChanged) await LoadAlarmsAsync();
+            StateHasChanged();
+        }));
+        _hub.On(ApiRoutes.MusicChanged, () => InvokeAsync(async () => { await LoadFilesAsync(); StateHasChanged(); }));
+        _hub.Reconnected += _ => InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+        _hub.Closed += _ => InvokeAsync(() => { _offline = true; StateHasChanged(); });
+
+        _ = ConnectLoopAsync();
+    }
+
+    private async Task ConnectLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested && _hub is { State: HubConnectionState.Disconnected })
+        {
+            try
+            {
+                await _hub.StartAsync(_cts.Token);
+                await InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+            }
+            catch (OperationCanceledException) { return; }
+            catch
+            {
+                await InvokeAsync(() => { _offline = true; StateHasChanged(); });
+                try { await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token); } catch (OperationCanceledException) { return; }
+            }
+        }
+    }
+
+    private async Task ReloadAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _alarms = await Api.GetAlarmsAsync();
+            _files = await Api.GetMusicAsync();
+            _status = await Api.GetStatusAsync();
+            _offline = false;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _offline = true;
+        }
+    }
+
+    private async Task LoadFilesAsync()
+    {
+        try { _files = await Api.GetMusicAsync(); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { }
+    }
+
+    private async Task LoadAlarmsAsync()
+    {
+        try { _alarms = await Api.GetAlarmsAsync(); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { }
+    }
+
+    private async Task StopAsync()
+    {
+        try { await Api.StopAsync(); }
+        catch (HttpRequestException) { _offline = true; }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts.Cancel();
+        if (_hub is not null) await _hub.DisposeAsync();
+        _cts.Dispose();
+    }
+}
